@@ -2564,5 +2564,93 @@ describe('require', () => {
       expect(Refresh.performReactRefresh).not.toHaveBeenCalled();
       expect(Refresh.performFullRefresh).not.toHaveBeenCalled();
     });
+
+    it('can update with cycles', () => {
+      createModuleSystem(moduleSystem, true, '');
+      const Refresh = createReactRefreshMock(moduleSystem);
+
+      // This is the module graph:
+      //        MiddleA <----> MiddleC
+      //       ^    ^          |
+      //      /     |          |
+      //     /      v          v
+      // Root*    MiddleB ---> Leaf
+      //
+      // * - refresh boundary (exports a component)
+
+      createModule(
+        moduleSystem,
+        0,
+        'root.js',
+        (global, require, importDefault, importAll, module, exports) => {
+          require(1);
+          module.exports = function Root() {};
+        },
+      );
+      createModule(
+        moduleSystem,
+        1,
+        'middleA.js',
+        (global, require, importDefault, importAll, module, exports) => {
+          const MB = require(2);
+          require(3);
+          module.exports = MB;
+        },
+      );
+      createModule(
+        moduleSystem,
+        2,
+        'middleB.js',
+        (global, require, importDefault, importAll, module, exports) => {
+          require(1);
+          const L = require(4); // Import leaf
+          module.exports = L;
+        },
+      );
+      createModule(
+        moduleSystem,
+        3,
+        'middleC.js',
+        (global, require, importDefault, importAll, module, exports) => {
+          require(1);
+          require(4);
+          module.exports = 0;
+        },
+      );
+      createModule(
+        moduleSystem,
+        4,
+        'leaf.js',
+        (global, require, importDefault, importAll, module, exports) => {
+          module.exports = 2;
+        },
+      );
+      moduleSystem.__r(0);
+
+      expect(moduleSystem.__r(1)).toBe(2);
+
+      moduleSystem.__accept(
+        4,
+        (global, require, importDefault, importAll, module, exports) => {
+          module.exports = 3;
+        },
+        [],
+        // Inverse dependency map.
+        {
+          4: [3, 2],
+          3: [1],
+          2: [1],
+          1: [3, 2, 0],
+          0: [],
+        },
+        undefined,
+      );
+
+      expect(moduleSystem.__r(1)).toBe(3);
+
+      jest.runAllTimers();
+      expect(Refresh.performReactRefresh).toHaveBeenCalled();
+      expect(Refresh.performFullRefresh).not.toHaveBeenCalled();
+    });
   });
 });
